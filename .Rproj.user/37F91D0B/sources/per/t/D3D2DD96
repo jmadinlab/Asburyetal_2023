@@ -1,0 +1,26 @@
+{
+    "id": "D3D2DD96",
+    "path": "~/Documents/GitHub/Asburyetal_2022/R/noaa_surface_geometry.R",
+    "project_path": "R/noaa_surface_geometry.R",
+    "type": "r_source",
+    "hash": "403209183",
+    "contents": "",
+    "dirty": false,
+    "created": 1669066699680.0,
+    "source_on_save": false,
+    "relative_order": 2,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "8,23",
+        "scrollLine": "0"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1669066704,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1669066704151,
+    "read_only": false,
+    "read_only_alternatives": []
+}
