@@ -5,21 +5,21 @@ library(dplyr)
 library(ggplot2)
 library(gridExtra)
 library(latex2exp)
-#library(RCPA3)
 
-data <- read.csv("Complexity_sub.csv")
+# load data
+data <- read.csv("output/MHI2019_Complexity.csv")
 
 L <- 2 #2x2m box
 scl <- L / c(1, 2, 3.125, 6.25, 12.5, 25, 50, 100, 200)
 L0 <- min(scl) 
 
-# load data
-data2 <- data %>% mutate(R = 0.5*log10(R_theory_mean^2 - 1),
-                         D = log10(L/L0)*(D_mean-3),
-                         H = log10(H_mean/(sqrt(2)*L0))) 
+# metric derivations
+data2 <- data %>% mutate(R = 0.5*log10(rugosity_theory^2 - 1),
+                         D = log10(L/L0)*(fractal-3),
+                         H = log10(height/(sqrt(2)*L0))) 
 
 # survey weights
-sectors <- read.csv("Sectors-Strata-Areas.csv")
+sectors <- read.csv("data/Sectors-Strata-Areas.csv")
 wtemp <- left_join(data2, sectors)
 
 weight <- plyr::ddply(wtemp, .(SEC_NAME,DEPTH_BIN,NH), summarize, n = length(unique(site)))
