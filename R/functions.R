@@ -47,9 +47,9 @@ height_variation <- function(write=TRUE, return=FALSE) {
   }
   # This variation method is time-consuming, and so save the result to avoid reprocessing if recalculting RDH
   if (write) {
-    write.csv(temp, paste0("output/var/var_", site[[1]][1], "_", rep, ".csv"), row.names = FALSE)
+    write.csv(temp, paste0("output/var/var_", site, "_", rep, ".csv"), row.names = FALSE)
   }
-  print(paste0("Complete: ", site[[1]][1], "_", sprintf("%04d", rep)))
+  print(paste0("Complete: ", site, "_", sprintf("%04d", rep)))
   # You can return the data and assign to variable if wish
   if (return) {
     return(temp)

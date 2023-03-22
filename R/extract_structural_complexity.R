@@ -9,7 +9,7 @@ library(sp)
 source("R/functions.R")
 
 # DEMs & DEM extent 
-files <- list.files("data")
+files <- list.files("data", pattern = "\\.tif")
 
 # allocate space
 complexity <- data.frame()
@@ -17,12 +17,12 @@ complexity <- data.frame()
 for (f in seq(1, length(files), 2)){
   
   borderfilename = files[f]
-  infilename= files[f+1]
+  infilename = files[f+1]
   
   # Load rasters (DEM & bounding extent)
   temp.ras <- raster(paste0("data/", infilename))
   data.b <- raster(paste0("data/", borderfilename))
-  plot(data)
+  #plot(temp.ras)
   
   # Bounding box
   a <- aggregate(data.b, fact = 100)
@@ -40,7 +40,8 @@ for (f in seq(1, length(files), 2)){
   rep <- 1
   i <- 0
   j <- 0
-  site = strsplit(names(data), split = "_") 
+  site <- strsplit(names(data), split = "_") 
+  site <- gsub(pattern = ".", replacement = "-", x = site[[1]][1], fixed = TRUE)
 
   # Delineate 5 boxes within a single plot
   while (i < 5) {
@@ -89,7 +90,7 @@ for (f in seq(1, length(files), 2)){
         rep <- rep + 1
         i <- i + 1
         
-        complexity <- rbind(complexity, data.frame(site = site[[1]][1],
+        complexity <- rbind(complexity, data.frame(site = site,
                            box = i,
                            x = x0,
                            y = y0,

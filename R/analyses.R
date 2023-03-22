@@ -1,60 +1,98 @@
-library(interactions)
-library(lme4)
-library(lmerTest)
-library(hier.part)
+
+
+##### GEOLOGICAL AND ENVIRONMENTAL FACTORS SHAPE REEF #####
+##### HABITAT STRUCTURE IN THE MAIN HAWAIIAN ISLANDS #####
+################### ASBURY ET AL. 2023 ###################
+
 library(ggplot2)
 library(pracma)
-library(factoextra)
-library(ggfortify)
-library(scales)
-library(tidyverse)
-library(lattice)
 library(imager)
 library(survey)
 library(gridExtra)
 library(plyr)
+library(dplyr)
 library(jtools)
+library(plot3D)
+library(basemaps)
+library(fruitr)
+library(ggfortify)
 source("R/functions.R")
 
-
-# color function #
-t_col <- function(color, percent = 50, name = NULL) {
-  ## Get RGB values for named color
-  rgb.val <- col2rgb(color)
-  ## Make new color using input color as base and alpha set by transparency
-  t.col <- rgb(rgb.val[1], rgb.val[2], rgb.val[3],
-               max = 255,
-               alpha = (100 - percent) * 255 / 100,
-               names = name)
-  ## Save the color
-  invisible(t.col) }
-
 ### DATA MANAGEMENT ############################################################################################################
-data <- read.csv("output/Complexity_sub.csv")
+# load data
+data <- read.csv("output/MHI2019_Complexity.csv")
 
+# metric derivations
 L <- 2 #2x2m box
 scl <- L / c(1, 2, 3.125, 6.25, 12.5, 25, 50, 100, 200)
 L0 <- min(scl) 
+data2 <- data %>% mutate(R = 0.5*log10(rugosity_theory^2 - 1),
+                         D = log10(L/L0)*(fractal-3),
+                         H = log10(height/(sqrt(2)*L0))) 
 
-data2 <- data %>% mutate(R = 0.5*log10(R_theory_mean^2 - 1),
-                         D = log10(L/L0)*(D_mean-3),
-                         H = log10(H_mean/(sqrt(2)*L0))) 
+# standardize & center predictors to put all on same scale 
+data2$depth_s <- as.vector(scale(data2$depth))
+data2$wave_max_log10_s <- as.vector(scale(log10(data2$wave_max)))
+data2$age_s <- as.vector(scale(data2$age))
+data2$coral_s <- as.vector(scale(data2$CORAL))
+
+# survey weights
+sectors <- read.csv("data/Sectors-Strata-Areas.csv")
+wtemp <- left_join(data2, sectors)
+
+weight <- plyr::ddply(wtemp, .(SEC_NAME,DEPTH_BIN,NH), summarize, n = length(unique(site)))
+weight$survey_weight <- weight$NH / weight$n
+
+data3 <- left_join(data2, weight)
+
+data3$conc <- c(paste0(data3$island, "_", data3$SEC_NAME, "_", data3$DEPTH_BIN, "_", data3$site))
+des <- svydesign(id= ~1, strata = ~ conc, weights = ~survey_weight, data = data3) 
+
 
 #### FIGURES ###################################################################################################################
 
+# function to extract legend from a plot
+g_legend<-function(a.gplot){ 
+  tmp <- ggplot_gtable(ggplot_build(a.gplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)}
+mylegend<-g_legend(ggplot(data3) +
+                     geom_line(aes(x = CORAL, y = habitat, color = habitat)) + 
+                     theme(legend.text = element_text(size = 10, family = "Times-Roman"), legend.title = element_text(size = 10,family = "Times-Roman"), 
+                           legend.position = "bottom", legend.direction = "horizontal") +
+                     guides(color = guide_legend(override.aes = list(size = 2))) +
+                     scale_color_manual(values = c("Aggregate reef" = "#D55E00", 
+                                                   "Pavement" = "#0072B2",
+                                                   "Rock and Boulder" = "#009E73"), 
+                                        name = "Habitat type"))
+
 #### FIGURE 1 ####
+ll <- cbind(data3$longitude, data3$latitude)
+merc <- lnglat_to_xy(ll)
+
+ext <- draw_ext()
+map <- ggplot() + 
+  basemap_gglayer(ext, map_service = "esri", map_type = "world_imagery") +
+  scale_fill_identity() + 
+  coord_sf() +
+  geom_point(aes(merc[,1], merc[,2]), size = 1, 
+             shape = 21, color = "black", fill = "yellow") +
+  theme_classic() +
+  theme(panel.border = element_rect(color = "black", fill=NA, size = 2)) 
+
+#### FIGURE 2 ####
 # habitat examples
 agr.pic <- load.image("figs/AGR.jpg")
 pav.pic <- load.image("figs/PAV.jpg")
 rob.pic <- load.image("figs/ROB.jpg")
 
 # organize data
-mdat <- data2[c("R","H")]
+mdat <- data3[c("R","H")]
 mdat$m <- 1
 
 # best fit orthogonal plane 
 A <- data.matrix(mdat)
-#B <- data.matrix(-data2["D"])
 A <- matrix(c (sum(mdat$R * mdat$R) , sum(mdat$R * mdat$H) , sum(mdat$R) , 
                sum(mdat$R * mdat$H) , sum(mdat$H * mdat$H) , sum(mdat$H) ,
                sum(mdat$R) , sum(mdat$H) , nrow(mdat)), nrow = 3, ncol = 3)
@@ -72,7 +110,6 @@ R.pred <- seq(min(mdat$R), max(mdat$R), length=grid.lines)
 H.pred <- seq(min(mdat$H), max(mdat$H), length=grid.lines)
 mat <- expand.grid(R=seq(min(mdat$R), max(mdat$R), length=grid.lines), 
                    H=H.pred)
-
 D.mat <- matrix(f(mat$R, mat$H), nrow = grid.lines, ncol = grid.lines)
 
 # d from plane vs data d 
@@ -102,7 +139,7 @@ ROBcolors <- colorRampPalette(ROBcollist)(100)
 
 
 # plot
-png("figs/figure1_habitats.png", width = 1.5, height = 3.5, units = "in", res = 600)
+#png("figs/figure2_habitats.png", width = 1.5, height = 3.5, units = "in", res = 600)
 par(mar=c(0, 2, 1, 1) +0.1,  family = "Times", ps = 10, mfrow = c(3,1)) 
 
 plot(agr.pic, axes = FALSE)
@@ -117,11 +154,11 @@ mtext("(c)", side = 3, at = -.5)
 
 dev.off()
 
-png("figs/figure1_all.png", width = 3, height = 3.5, units = "in", res = 600)
+#png("figs/figure2_all.png", width = 3, height = 3.5, units = "in", res = 600)
 par(mar=c(1.2, 2, 1, .5) +0.1, family = "Times", ps = 10)
 
 scatter3D(data2$R, data2$H, data2$D, pch = 20, cex = 1, 
-          col= rev(hcl.colors(100, "grays", alpha = 0.3)), 
+          col= rev(hcl.colors(100, "grays")), 
           xlim=c(min(data2$R)-0.25, max(data2$R)+0.25), 
           ylim=c(min(data2$H)-0.25, max(data2$H)+0.25), 
           zlim=c(min(data2$D)-0.05, max(data2$D)+0.05), 
@@ -132,8 +169,9 @@ scatter3D(data2$R, data2$H, data2$D, pch = 20, cex = 1,
                     fitpoints=data2$D), 
           theta=215, 
           phi=0,
-          colkey=list(side = 2, length = 0.5, width = 1, line.clab = 1, dist=0),
-          clab=expression(italic(D)))
+          #colkey=list(side = 2, length = 0.5, width = 1, line.clab = 1, dist=0),
+          clab=expression(italic(D)),
+          colkey=FALSE)
 points3D(R_mean$R - 0.2, H_mean$H + 0.2, D_mean$D,
          col = c("#009E73","#0072B2","#D55E00"), cex = 2, pch = 20,
          surf=NULL,
@@ -144,16 +182,16 @@ text3D(-0.6, 2.9, -1.2, labels=expression(italic(r)^2 == 0.974), surf = NULL, ad
 
 dev.off()
 
-png("figs/figure1_ByHabitat.png", width = 1.5, height = 3.5, units = "in", res = 600)
+#png("figs/figure2_ByHabitat.png", width = 1.5, height = 3.5, units = "in", res = 600)
 par(mar=c(.6, .5, 1, .6) +0.1, family = "Times", ps = 10, mfrow = c(3,1))
 scatter3D(dataAGR$R, dataAGR$H, dataAGR$D, pch = 20, cex = .8, 
           col = rev(AGRcolors),
           xlim=c(min(data2$R)-0.25, max(data2$R)+0.25), 
           ylim=c(min(data2$H)-0.25, max(data2$H)+0.25), 
           zlim=c(min(data2$D)-0.05, max(data2$D)+0.05), 
-          ylab="Height range", 
-          xlab="Rugosity", 
-          zlab="Fractal dimension", 
+          ylab="", 
+          xlab="", 
+          zlab="", 
           surf=list(x=R.pred, y=H.pred, z=D.mat, facets=NA, col=rgb(0,0,0,0.01), 
                     fitpoints=dataAGR$D), 
           theta=215, 
@@ -165,9 +203,9 @@ scatter3D(dataPAV$R, dataPAV$H, dataPAV$D, pch = 20, cex =.8,
           xlim=c(min(data2$R)-0.25, max(data2$R)+0.25), 
           ylim=c(min(data2$H)-0.25, max(data2$H)+0.25), 
           zlim=c(min(data2$D)-0.05, max(data2$D)+0.05), 
-          ylab="Height range", 
-          xlab="Rugosity", 
-          zlab="Fractal dimension", 
+          ylab="", 
+          xlab="", 
+          zlab="", 
           surf=list(x=R.pred, y=H.pred, z=D.mat, facets=NA, col=rgb(0,0,0,0.01), 
                     fitpoints=dataPAV$D), 
           theta=215, 
@@ -179,9 +217,9 @@ scatter3D(dataROB$R, dataROB$H, dataROB$D, pch = 20, cex = .8,
           xlim=c(min(data2$R)-0.25, max(data2$R)+0.25), 
           ylim=c(min(data2$H)-0.25, max(data2$H)+0.25), 
           zlim=c(min(data2$D)-0.05, max(data2$D)+0.05), 
-          ylab="Height range", 
-          xlab="Rugosity", 
-          zlab="Fractal dimension", 
+          ylab="", 
+          xlab="", 
+          zlab="", 
           surf=list(x=R.pred, y=H.pred, z=D.mat, facets=NA, col=rgb(0,0,0,0.01), 
                     fitpoints=dataROB$D), 
           theta=215, 
@@ -191,21 +229,55 @@ mtext("(g)", side = 3, at = -.5)
 
 dev.off()
 
-
-
 #### FIGURE 3 ####
 
-# survey weights
-sectors <- read.csv("data/Sectors-Strata-Areas.csv")
-wtemp <- left_join(data2, sectors)
+data.pca <- data3[c("R","D","H","wave_max_log10_s","depth_s","age_s","coral_s","habitat")]
+names(data.pca)[1] <- "Rugosity"
+names(data.pca)[2] <- "Fractal dimension"
+names(data.pca)[3] <- "Height range"
+names(data.pca)[4] <- "Exposure"
+names(data.pca)[5] <- "Depth"
+names(data.pca)[6] <- "Geological Reef Age"
+names(data.pca)[7] <- "Coral Cover"
 
-weight <- plyr::ddply(wtemp, .(SEC_NAME,DEPTH_BIN,NH), summarize, n = length(unique(site)))
-weight$survey_weight <- weight$NH / weight$n
+pca.var <- prcomp(data.pca[1:7], center = TRUE, scale = TRUE) 
+summary(pca.var)
 
-data3 <- left_join(data2, weight)
+# loadings plot
+g <- autoplot(pca.var, data.pca,  loadings = TRUE, loadings.col = "black", loadings.label = TRUE, col = "habitat",
+              loadings.label.size = 1, loadings.label.col = "black", frame = TRUE, frame.type = "norm") +
+  scale_color_manual(values = alpha(c("#D55E00","#0072B2","#009E73"), 0.4)) +
+  scale_fill_manual(values = alpha(c("#D55E00","#0072B2","#009E73"), 0.4)) +
+  theme_classic() +
+  theme(text = element_text(family = "Times-Roman", size = 10)) 
 
-data3$conc <- c(paste0(data3$island, "_", data3$SEC_NAME, "_", data3$DEPTH_BIN, "_", data3$site))
-des <- svydesign(id= ~1, strata = ~ conc, weights = ~survey_weight, data = data3) 
+
+arrow_ends <- layer_data(g, 2)[,c(2,4)]
+for (a in 1:nrow(arrow_ends)) {
+  for (b in 1:2) {
+    value <- arrow_ends[a,b]
+    if (value > 0) {
+      arrow_ends[a,b] <- value + 0.008 }
+    if (value < 0) {
+      arrow_ends[a,b] <- value - 0.006 }}}
+
+
+g2 <- autoplot(pca.var, data.pca, loadings = TRUE, loadings.col = "black", col = "habitat",
+               loadings.label.size = 2, loadings.label.col = "black", frame = TRUE, frame.type = "norm") +
+  scale_color_manual(values = alpha(c("#D55E00","#0072B2","#009E73"), 0.4)) +
+  scale_fill_manual(values = alpha(c("#D55E00","#0072B2","#009E73"), 0.4)) +
+  geom_label(data = arrow_ends, aes(xend, yend), label = names(pca.var$center), size = 2, label.size = 0,family = "Times-Roman") +
+  labs(colour = "Habitat Type") +
+  theme_classic() +
+  theme(text = element_text(family = "Times-Roman", size = 10), legend.position = "none") 
+
+#png("figs/figure3.png", width = 5, height = 4, unit= "in", res = 600)
+grid.arrange(arrangeGrob(g2), 
+             mylegend, 
+             heights = c(10,1))
+dev.off()
+
+#### FIGURE 4 ####
 
 wave_mn <- mean(data3$wave_max_log10)
 wave_sd <- sd(data3$wave_max_log10)
@@ -234,7 +306,7 @@ newdata.R$age_s <- mean(newdata.R$age_s)
 newdata.R$wave_max_log10_s <- mean(newdata.R$wave_max_log10_s)
 newdata.R$coral_s <- mean(newdata.R$coral_s)
 
-# Height range #
+# Height range 
 mod.sw.H <- svyglm(H ~ 0 + habitat*depth_s + habitat*age_s + habitat*wave_max_log10_s + habitat*coral_s + 
                      habitat*depth_s*wave_max_log10_s, design=des)
 summary(mod.sw.H)
@@ -1003,1152 +1075,12 @@ D.COR <- ggplot() +
                      labels = c(0,20,40,60,80))
 
 # plot
-g_legend<-function(a.gplot){ # function to extract legend from a plot
-  tmp <- ggplot_gtable(ggplot_build(a.gplot))
-  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
-  legend <- tmp$grobs[[leg]]
-  return(legend)}
-mylegend<-g_legend(ggplot(data3) +
-                     geom_line(aes(x = CORAL, y = habitat, color = habitat)) + 
-                     theme(legend.text = element_text(size = 10, family = "Times-Roman"), legend.title = element_text(size = 10,family = "Times-Roman"), 
-                           legend.position = "bottom", legend.direction = "horizontal") +
-                     guides(color = guide_legend(override.aes = list(size = 2))) +
-                     scale_color_manual(values = c("Aggregate reef" = "#D55E00", 
-                                                   "Pavement" = "#0072B2",
-                                                   "Rock and Boulder" = "#009E73"), 
-                                        name = "Habitat type"))
-fig3 <- grid.arrange(arrangeGrob(R.DEP + ggtitle("(a)"), R.AGE + ggtitle("(b)"), R.WAVE + ggtitle("(c)"), R.COR + ggtitle("(d)"),
+fig4 <- grid.arrange(arrangeGrob(R.DEP + ggtitle("(a)"), R.AGE + ggtitle("(b)"), R.WAVE + ggtitle("(c)"), R.COR + ggtitle("(d)"),
                                  D.DEP + ggtitle("(e)"), D.AGE + ggtitle("(f)"), D.WAVE + ggtitle("(g)"), D.COR + ggtitle("(h)"),
                                  H.DEP + ggtitle("(i)"), H.AGE + ggtitle("(j)"), H.WAVE + ggtitle("(k)"), H.COR + ggtitle("(l)"),
                                  nrow = 3, ncol = 4), 
                      mylegend, 
                      heights = c(10,1))
-ggsave("figs/figure3.png", plot = fig3, width = 7, height = 5, units = c("in"), dpi = 600)
+#ggsave("figs/figure4.png", plot = fig4, width = 7, height = 5, units = c("in"), dpi = 600)
 
-
-
-
-
-
-
-
-
-
-
-# Relationships by habitat #####################################################################################################
-hab <- c("AGR","ROB","PAV")
-
-temp1 <- data[data$habitat== hab[1],]
-temp2 <- data[data$habitat== hab[2],]
-temp3 <- data[data$habitat== hab[3],]
-
-fitR1 <- lm(temp1$R_log10 ~ temp1$wave_max_log10)
-fitH1 <- lm(temp1$H_log10 ~ temp1$wave_max_log10)
-fitD1 <- lm(temp1$D_sum ~ temp1$wave_max_log10)
-fitR2 <- lm(temp2$R_log10 ~ temp2$wave_max_log10)
-fitH2 <- lm(temp2$H_log10 ~ temp2$wave_max_log10)
-fitD2 <- lm(temp2$D_sum ~ temp2$wave_max_log10)
-fitR3 <- lm(temp3$R_log10 ~ temp3$wave_max_log10)
-fitH3 <- lm(temp3$H_log10 ~ temp3$wave_max_log10)
-fitD3 <- lm(temp3$D_sum ~ temp3$wave_max_log10)
-
-dd <- seq(min(data$depth.m), max(data$depth.m), 1)
-modR1 <- lm(R_log10 ~  poly(depth.m, 2), temp1)
-modR2 <- lm(R_log10 ~  poly(depth.m, 2), temp2)
-modR3 <- lm(R_log10 ~  poly(depth.m, 2), temp3)
-modH1 <- lm(H_log10 ~  poly(depth.m, 2), temp1)
-modH2 <- lm(H_log10 ~  poly(depth.m, 2), temp2)
-modH3 <- lm(H_log10 ~  poly(depth.m, 2), temp3)
-modD1 <- lm(D_sum ~  poly(depth.m, 2), temp1)
-modD2 <- lm(D_sum ~  poly(depth.m, 2), temp2)
-modD3 <- lm(D_sum ~  poly(depth.m, 2), temp3)
-
-imodR1 <- lm(R_log10 ~ rank, temp1)
-imodR2 <- lm(R_log10 ~ rank, temp2)
-imodR3 <- lm(R_log10 ~ rank, temp3)
-imodH1 <- lm(H_log10 ~ rank, temp1)
-imodH2 <- lm(H_log10 ~ rank, temp2)
-imodH3 <- lm(H_log10 ~ rank, temp3)
-imodD1 <- lm(D_sum ~ rank, temp1)
-imodD2 <- lm(D_sum ~ rank, temp2)
-imodD3 <- lm(D_sum ~ rank, temp3)
-
-par(mfrow=c(3,3), mar=c(5, 6.1, 3, 3.5))
-
-plot(R_log10 ~ wave_max_log10, data, pch = 16, cex = .5, ylab = "Rugosity (log10)", xlab = "Exposure, kW/m (log10)", col = "grey")
-abline(fitR1, col = "red", lwd = 2)
-abline(fitR2, col = "seagreen", lwd = 2)
-abline(fitR3, col = "steelblue", lwd = 2)
-
-plot(H_log10 ~ wave_max_log10, data, pch = 16, cex = .5, ylab = "Height range (log10)", xlab = "Exposure, kW/m (log10)", col = "grey")
-abline(fitH1, col = "red", lwd = 2)
-abline(fitH2, col = "seagreen", lwd = 2)
-abline(fitH3, col = "steelblue", lwd = 2)
-
-plot(D_sum ~ wave_max_log10, data, pch = 16, cex = .5, ylab = "Fractal dimension", xlab = "Exposure, kW/m (log10)", col = "grey")
-abline(fitD1, col = "red", lwd = 2)
-abline(fitD2, col = "seagreen", lwd = 2)
-abline(fitD3, col = "steelblue", lwd = 2)
-
-plot(R_log10 ~ depth.m, data, pch = 16, cex = .5, ylab = "Rugosity (log10)", xlab = "Depth, m", col = "grey")
-lines(dd, predict(modR1, list(depth.m=dd)), lwd = 2, col = "red")
-lines(dd, predict(modR2, list(depth.m=dd)), lwd = 2, col = "seagreen")
-lines(dd, predict(modR3, list(depth.m=dd)), lwd = 2, col = "steelblue")
-
-plot(H_log10 ~ depth.m, data, pch = 16, cex = .5, ylab = "Height range (log10)", xlab = "Depth, m", col = "grey")
-lines(dd, predict(modH1, list(depth.m=dd)), lwd = 2, col = "red")
-lines(dd, predict(modH2, list(depth.m=dd)), lwd = 2, col = "seagreen")
-lines(dd, predict(modH3, list(depth.m=dd)), lwd = 2, col = "steelblue")
-
-plot(D_sum ~ depth.m, data, pch = 16, cex = .5, ylab = "Fractal dimension", xlab = "Depth, m", col = "grey")
-lines(dd, predict(modD1, list(depth.m=dd)), lwd = 2, col = "red")
-lines(dd, predict(modD2, list(depth.m=dd)), lwd = 2, col = "seagreen")
-lines(dd, predict(modD3, list(depth.m=dd)), lwd = 2, col = "steelblue")
-
-plot(R_log10 ~ rank, data, pch = 16, cex = .5, ylab = "Rugosity (log10)", xlab = "Island rank", col = "grey")
-abline(imodR1, col = "red", lwd = 2)
-abline(imodR2, col = "seagreen", lwd = 2)
-abline(imodR3, col = "steelblue", lwd = 2)
-
-plot(H_log10 ~ rank, data, pch = 16, cex = .5, ylab = "Height range (log10)", xlab = "Island rank", col = "grey")
-abline(imodH1, col = "red", lwd = 2)
-abline(imodH2, col = "seagreen", lwd = 2)
-abline(imodH3, col = "steelblue", lwd = 2)
-
-plot(D_sum ~ rank, data, pch = 16, cex = .5, ylab = "Fractal dimension", xlab = "Island rank", col = "grey")
-abline(imodD1, col = "red", lwd = 2)
-abline(imodD2, col = "seagreen", lwd = 2)
-abline(imodD3, col = "steelblue", lwd = 2)
-
-# Contour plots ##################################################################################################################
-lmodR <- lmer(R_log10 ~ wave_max_log10_s * depth_s + (1|habitat) + (1|site), data) #ranova() both significant
-lmodH <- lmer(H_log10 ~  wave_max_log10_s * depth_s + (1|habitat)+ (1|site), data) #ranova() both significant
-lmodD <- lmer(D_mean ~  wave_max_log10_s * depth_s + (1|habitat)+ (1|site), data) #ranova() both significant
-
-dd <- seq(min(data$depth_s), max(data$depth_s), .09)
-ww <- seq(min(data$wave_max_log10_s), max(data$wave_max_log10_s), 0.13)
-
-ch <- chull(data2$depth_s, data2$wave_max_log10_s)
-ch <- c(ch, ch[1])
-
-matR <- matD <- matH <- matrix(NA, length(dd), length(ww))
-
-for (d in 1:length(dd)) {
-  for (w in 1:length(ww)) {
-    matR[d,w] <- predict(lmodR, data.frame(wave_max_log10_s=ww[w], depth_s=dd[d]), re.form=NA)
-    # matD[d,w] <- predict(lmodD, data.frame(wave_max_log10_s=ww[w], depth_s=dd[d]), re.form=NA)
-    # matH[d,w] <- predict(lmodH, data.frame(wave_max_log10_s=ww[w], depth_s=dd[d]), re.form=NA)
-    # 
-    pp <- point.in.polygon(dd[d],ww[w],data$depth_s[ch],data$wave_max_log10_s[ch])
-    if (pp == 0) {
-      matR[d,w] <- NA
-      # matD[d,w] <- NA
-      # matH[d,w] <- NA
-    }
-  }
-}
-
-
-R <- aggregate(depth_s ~ habitat, data, mean)
-R$wave <- aggregate(wave_max_log10_s ~ habitat, data, mean)$wave_max_log10_s
-R$wave_sd <- aggregate(wave_max_log10_s ~ habitat, data, sd)$wave_max_log10_s
-R$wave_n <- aggregate(wave_max_log10_s ~ habitat, data, length)$wave_max_log10_s
-R$wave_se <- R$wave_sd / sqrt(R$wave_n)
-R$depth_sd <- aggregate(depth_s ~ habitat, data, sd)$depth_s
-R$depth_n <- aggregate(depth_s ~ habitat, data, length)$depth_s
-R$depth_se <- R$depth_sd / sqrt(R$depth_n)
-
-collist <- c("steelblue", "red") 
-mycolors <- colorRampPalette(collist)(200)
-
-#png(paste0("figures/", hab[c], "_contours.png"), width = 400, height = 600, res = 100)
-
-par(mfrow=c(3,1), mar=c(5, 6.1, 3, 4)) 
-
-image(dd, ww, matR, col=mycolors, xlab="Depth, m", ylab="Exposure, kW/m (log10)")
-contour(dd, ww, 10^matR, add = TRUE, col = "black", nlevels = 4, labcex = .8)
-mtext(expression(bold("Rugosity (log10)")), 2, 0, cex = 1, line = 4)
-#points(wave_max_log10 ~ depth.m, data, col = "black")
-#text(R$depth.m+2, R$wave, R$habitat, font = 2, cex = 1, col = "black")
-#arrows(R$depth.m - R$depth_se, R$wave, R$depth.m + R$depth_se, R$wave, code=3, angle=90, length=0.025, lwd = .4)
-#arrows(R$depth.m, R$wave - R$wave_se, R$depth.m, R$wave + R$wave_se, code=3, angle=90, length=0.025, lwd = .4)
-gradientLegend(valRange = c(min(10^matR, na.rm = TRUE), max(10^matR, na.rm = TRUE)), color = mycolors, pos = 0.5,  length = .7, depth = .03, dec = 2, fit.margin = TRUE, n.seg = 1)
-
-image(dd, ww, matH, col=mycolors, xlab="Depth, m", ylab="Exposure, kW/m (log10)")
-contour(dd, ww, 10^matH, add = TRUE, col = "black", nlevels = 4, labcex = .8)
-mtext(expression(bold("Height range (log10)")), 2, 0, cex = 1, line = 4)
-#points(wave_max_log10 ~ depth.m, data, col = "black")
-#text(R$depth.m+2, R$wave, R$habitat, font = 2, cex = 1, col = "black")
-#arrows(R$depth.m - R$depth_se, R$wave, R$depth.m + R$depth_se, R$wave, code=3, angle=90, length=0.025, lwd = .4)
-#arrows(R$depth.m, R$wave - R$wave_se, R$depth.m, R$wave + R$wave_se, code=3, angle=90, length=0.025, lwd = .4)
-gradientLegend(valRange = c(min(10^matH, na.rm = TRUE), max(10^matH, na.rm = TRUE)), color = mycolors, pos = 0.5,  length = .7, depth = .03, dec = 2, fit.margin = TRUE, n.seg = 1)
-
-image(dd, ww, matD, col=mycolors, xlab="Depth, m", ylab="Exposure, kW/m (log10)")
-contour(dd, ww, matD, add = TRUE, col = "black", nlevels = 4, labcex = .8)
-mtext(expression(bold("Fractal dimension")), 2, 0, cex = 1, line = 4)
-#points(wave_max_log10 ~ depth.m, data, col = "black")
-#text(R$depth.m+2, R$wave, R$habitat, font = 2, cex = 1, col = "black")
-#arrows(R$depth.m - R$depth_se, R$wave, R$depth.m + R$depth_se, R$wave, code=3, angle=90, length=0.025, lwd = .4)
-#arrows(R$depth.m, R$wave - R$wave_se, R$depth.m, R$wave + R$wave_se, code=3, angle=90, length=0.025, lwd = .4)
-gradientLegend(valRange = c(min(matD, na.rm = TRUE),max(matD, na.rm = TRUE)), color = mycolors, pos = 0.5,  length = .7, depth = .03, dec = 2, fit.margin = TRUE, n.seg = 1)
-
-#dev.off()
-
-# I <- aggregate(depth ~ island, data, mean)
-# I$wave <- aggregate(wave_max_log10 ~ island, data, mean)$wave_max_log10
-# I$wave_sd <- aggregate(wave_max_log10 ~ island, data, sd)$wave_max_log10
-# I$wave_n <- aggregate(wave_max_log10 ~ island, data, length)$wave_max_log10
-# I$wave_se <- I$wave_sd / sqrt(I$wave_n)
-# I$depth_sd <- aggregate(depth ~ island, data, sd)$depth
-# I$depth_n <- aggregate(depth ~ island, data, length)$depth
-# I$depth_se <- I$depth_sd / sqrt(I$depth_n)
-
-# by island
-isl <- unique(data$island)
-mod <- lm(R_log10 ~ wave_max_log10 * poly(depth.m, 2) * island, data)
-
-par(mfrow=c(2,4), mar=c(5, 6.1, 3, 3.5)) 
-
-for (c in 1:8) {
-  
-  temp <- data[data$island== isl[c],]
-  
-  dd <- seq(min(data$depth.m), max(data$depth.m), 1)
-  ww <- seq(min(data$wave_max_log10), max(data$wave_max_log10), 0.1)
-  
-  matR <- matD <- matH <- matrix(NA, length(dd), length(ww))
-  
-  for (d in 1:length(dd)) {
-    for (w in 1:length(ww)) {
-      matR[d,w] <- predict(mod, data.frame(wave_max_log10=ww[w], depth.m=dd[d], island=isl[c]), re.form=NA)
-    }
-  }
-  
-  collist <- c("#D81B60","#1E88E5","#FFC107") 
-  mycolors <- colorRampPalette(collist)(200)
-  
-  image(dd, ww, matR, col=mycolors, xlab="Depth, m", ylab="Exposure, kW/m (log10)")
-  points(wave_max_log10 ~ depth.m, temp)
-  contour(dd, ww, 10^matR, add = TRUE, col = "black", nlevels = 4)
-  mtext(expression(bold("Rugosity")), 2, 0, cex = 1, line = 4)
-  gradientLegend(valRange = c(min(10^matR), max(10^matR)), color = mycolors, pos = 0.5,  length = .7, depth = .03, dec = 2, fit.margin = TRUE, n.seg = 1)
-  title(main = isl[c], cex.main = 2)
-  
-}
-
-
-# PCA ##########################################################################################################################
-data <- read.csv("Complexity_all.csv")
-sub <- read.csv("Complexity_sub.csv")
-
-L <- 2 #2x2m box
-scl <- L / c(1, 2, 3.125, 6.25, 12.5, 25, 50, 100, 200)
-L0 <- min(scl) 
-
-data.pca <- data %>% mutate(R = 0.5*log10(R_theory_mean^2 - 1),
-                         D = log10(L/L0)*(D_mean-3),
-                         H = log10(H_mean/(sqrt(2)*L0))) 
-
-names(data.pca)[64] <- "Rugosity"
-names(data.pca)[65] <- "Fractal dimension"
-names(data.pca)[66] <- "Height range"
-names(data.pca)[27] <- "Exposure"
-names(data.pca)[28] <- "Depth"
-names(data.pca)[29] <- "Geological Reef Age"
-names(data.pca)[59] <- "Coral Cover"
-
-
-pca.var <- prcomp(data.pca[,c(64,65,66,27,28,29,59)], center = TRUE, scale = TRUE) 
-summary(pca.var)
-
-# eigenvalues -- according to Kaiser criterion, keep those greater than 1
-var <- pca.var$sdev ^ 2
-
-varPer <- var/sum(var)*100
-barplot(varPer, xlab= "PC", ylab = "Percent variance", names.arg=1:length(varPer), las=1, ylim=c(0, max(varPer)), col = "grey")
-abline(h = (1/7)*100, col = "red")
-
-
-# relationships of components
-load <- pca.var$rotation
-cut <- 1/7 #cutoff
-cut2 <- -cut
-sort1 <- load[order(load[,1]),1]
-dotplot(sort1)
-
-sort2 <- load[order(load[,2]),2]
-dotplot(sort2)
-
-pc1 <- as.numeric(load[,1]) * 100
-pc1[8] <- varPer[1]
-pc2 <- as.numeric(load[,2]) * 100
-pc2[8] <- varPer[2]
-pc3 <- as.numeric(load[,3]) * 100
-pc3[8] <- varPer[3]
-
-library(kableExtra)
-sort <- data.frame(row.names = c("Rugosity","Fractal dimension","Height range","Exposure","Depth","Geological reef age","Coral cover","Total variance"))
-sort$PC1 <- format(pc1, digits = 3)
-sort$PC2 <- format(pc2, digits = 3)
-sort$PC3 <- format(pc3, digits = 3)
-sort$PC1[c(1,3,4,5,6,7)] <- cell_spec(sort$PC1[c(1,3,4,5,6,7)], bold =  T)
-sort$PC2[c(2,3,4,5,7)] <- cell_spec(sort$PC2[c(2,3,4,5,7)], bold =  T)
-sort$PC3[c(1,3,4,5)] <- cell_spec(sort$PC3[c(1,3,4,5)], bold =  T)
-
-
-sort %>% 
-  kbl(escape = F) %>%
-  kable_classic(html_font = "Times New Roman") %>%
-  row_spec(7, extra_css = "border-bottom: 2px solid;")
-  
-# loadings plot
-g <- autoplot(pca.var, data.pca,  loadings = TRUE, loadings.col = "black", loadings.label = TRUE, col = "habitat",
-              loadings.label.size = 1, loadings.label.col = "black", frame = TRUE, frame.type = "norm") +
-  scale_color_manual(values = alpha(c("#D55E00","#0072B2","#009E73"), 0.4)) +
-  scale_fill_manual(values = alpha(c("#D55E00","#0072B2","#009E73"), 0.4)) +
-  theme_classic() +
-  theme(text = element_text(family = "Times-Roman", size = 10)) 
-  
-
-arrow_ends <- layer_data(g, 2)[,c(2,4)]
-for (a in 1:nrow(arrow_ends)) {
-  for (b in 1:2) {
-    value <- arrow_ends[a,b]
-    if (value > 0) {
-      arrow_ends[a,b] <- value + 0.008
-    }
-    if (value < 0) {
-      arrow_ends[a,b] <- value - 0.006
-    }
-  }
-}
-
-
-g2 <- autoplot(pca.var, data.pca, loadings = TRUE, loadings.col = "black", col = "habitat",
-         loadings.label.size = 2, loadings.label.col = "black", frame = TRUE, frame.type = "norm") +
-  scale_color_manual(values = alpha(c("#D55E00","#0072B2","#009E73"), 0.4)) +
-  scale_fill_manual(values = alpha(c("#D55E00","#0072B2","#009E73"), 0.4)) +
-  #geom_point(data = arrow_ends, aes(xend, yend), size = 3, col = "white") +
-  geom_label(data = arrow_ends, aes(xend, yend), label = names(pca.var$center), size = 2, label.size = 0,family = "Times-Roman") +
-  #guides(fill = guide_legend(title="Habitat Type")) +
-  labs(colour = "Habitat Type") +
-  theme_classic() +
-  theme(text = element_text(family = "Times-Roman", size = 10), legend.position = "none") #legend.key.size = unit(.2, 'cm'), legend.position = "bottom", 
-
-png("FINALDRAFT/Figure2.png", width = 5, height = 4, unit= "in", res = 600)
-grid.arrange(arrangeGrob(g2), 
-             mylegend, 
-             heights = c(10,1))
-dev.off()
-
-# 3d scatterplots part 1 (scatterplot3D) #######################################################################################
-# myteal <- t_col("darkcyan", perc = 50)
-
-data_subR <- aggregate(R_log10 ~ longitude + latitude, data, FUN = mean)
-lmR <- lm(data$R_log10 ~ data$longitude + data$latitude)
-data_subH <- aggregate(H_log10 ~ longitude + latitude, data, FUN = mean)
-lmH <- lm(data$H_log10 ~ data$longitude + data$latitude)
-data_subD <- aggregate(D_sum ~ longitude + latitude, data, FUN = mean)
-lmD <- lm(data$D_sum ~ data$longitude + data$latitude)
-data_subV <- aggregate(vrm_1cm ~ longitude + latitude, data, FUN = mean)
-lmV <- lm(data$vrm_1cm ~ data$longitude + data$latitude)
-
-dev.off()
-par(mfrow=c(1,3), mar=c(5, 6.1, 3, 2.1))
-
-par(pty = "s")
-sR <- scatterplot3d(data_subR$longitude, data_subR$latitude, data_subR$R_log10, pch = 19, type = "p", color = "black",
-                    y.margin.add = .5, grid = TRUE, box = TRUE, xlab = expression(paste("Longitude (", degree, ")")),
-                    ylab = expression(paste("Latitude (", degree, ")")), zlab = "Rugosity (log10)", angle = 30, cex.axis = .5)
-sR$plane3d(lmR, draw_polygon = TRUE, draw_lines = TRUE, polygon_args = list(col = myteal))
-
-sH <- scatterplot3d(data_subH$longitude, data_subH$latitude, data_subH$H_log10, pch = 19, type = "p", color = "black",
-                    y.margin.add = .5, grid = TRUE, box = TRUE, xlab = expression(paste("Longitude (", degree, ")")),
-                    ylab = expression(paste("Latitude (", degree, ")")), zlab = "Height range (log10)", angle = 55, cex.axis = .5)
-sH$plane3d(lmH, draw_polygon = TRUE, draw_lines = TRUE, polygon_args = list(col = myteal))
-
-sD <- scatterplot3d(data_subD$longitude, data_subD$latitude, data_subD$D_sum, pch = 19, type = "p", color = "black",
-                    y.margin.add = .5, grid = TRUE, box = TRUE, xlab = expression(paste("Longitude (", degree, ")")),
-                    ylab = expression(paste("Latitude (", degree, ")")), zlab = "Fractal Dimension", angle = 30, cex.axis = .5)
-sD$plane3d(lmD, draw_polygon = TRUE, draw_lines = TRUE, polygon_args = list(col = myteal))
-
-sV <- scatterplot3d(data_subV$latitude, data_subV$longitude, data_subV$vrm_1cm, pch = 19, type = "p", color = "black",
-                    y.margin.add = .5, grid = TRUE, box = TRUE, xlab = expression(paste("Latitude (", degree, ")")),
-                    ylab = expression(paste("Longitude (", degree, ")")), zlab = "VRM", angle = 30, cex.axis = .5)
-sV$plane3d(lmV, draw_polygon = TRUE, draw_lines = TRUE, polygon_args = list(col = myteal))
-
-# 3d scatter plots part 2 (scatter3D) ##########################################################################################
-collist2 <- c("cyan","cyan3","black")
-mycolors2 <- colorRampPalette(collist2)(200)
-tblack <- t_col("black", perc = 70)
-library(usmap)
-hawaii <- us_map(include = c("HI"))
-
-x <- data$longitude
-y <- data$latitude
-zR <- data$R_log10
-zH <- data$H_log10
-zD <- data$D_sum
-fitR <- lm(zR ~ x + y)
-fitH <- lm(zH ~ x + y)
-fitD <- lm(zD ~ x + y)
-grid.lines = 26
-x.pred <- seq(min(x), max(x), length.out = grid.lines)
-y.pred <- seq(min(y), max(y), length.out = grid.lines)
-xy <- expand.grid(x = x.pred, y = y.pred)
-z.predR <- matrix(predict(fitR, newdata = xy), nrow = grid.lines, ncol= grid.lines)
-z.predH <- matrix(predict(fitH, newdata = xy), nrow = grid.lines, ncol= grid.lines)
-z.predD <- matrix(predict(fitD, newdata = xy), nrow = grid.lines, ncol= grid.lines)
-fitpointsR <- predict(fitR)
-fitpointsH <- predict(fitH)
-fitpointsD <- predict(fitD)
-
-par(mfrow=c(2,2), mar=c(2,1,1,1))
-plot(hawaii$x, hawaii$y, type = "p", pch = 16, ylab = "Latitude", xlab = "Longitude")
-scatter3D(x, y, zR, ticktype = "detailed", xlab = "Longitude", ylab = "Latitude", zlab = "Rugosity (log10)", theta = 40, col = tblack, 
-          cex = 1, phi = 25, pch = 16, surf = list(x = x.pred, y = y.pred, z = z.predR, fit = fitpointsR, col = mycolors2))
-scatter3D(x, y, zH, ticktype = "detailed", xlab = "Longitude", ylab = "Latitude", zlab = "Height range (log10)", theta = 40, col = tblack, 
-          cex = 1, phi = 25, pch = 16, surf = list(x = x.pred, y = y.pred, z = z.predH, fit = fitpointsH, col = mycolors2))
-scatter3D(x, y, zD, ticktype = "detailed", xlab = "Longitude", ylab = "Latitude", zlab = "Fractal dimension", theta = 40, col = tblack,
-          cex = 1, phi = 25, pch = 16, surf = list(x = x.pred, y = y.pred, z = z.predD, fit = fitpointsD, col = mycolors2))
-
-
-
-# heirarchial partitioning #####################################################################################################
-# by habitat
-hab <- c("AGR","ROB","PAV")
-for (h in (1:3)){
-  
-  temp <- data[data$habitat== hab[h],]
-  
-  R <- hier.part(temp$R_log10, temp[c("age","wave_max_log10","depth")]) #ordered in decreasing scale (island greatest, exposure operates at shoreline distances, then depth)
-  H <- hier.part(temp$H_log10, temp[c("age","wave_max_log10","depth")])
-  D <- hier.part(temp$D_mean, temp[c("age","wave_max_log10","depth")])
-  
-  #png(paste0("figures/", hab[h], "_hier.png"), width = 600, height = 200, res = 100)
-  
-  par(mfrow=c(1,3), mar=c(5, 4.1, 3, 2))
-  
-  xr <- barplot(R$I.perc$ind.exp.var, ylim = c(0,100), names.arg = c("island","exposure","depth"), ylab = "% independent effects", xlab = "Rugosity", cex.names = .8)
-  text(x = xr, y = R$I.perc$ind.exp.var, label = round(R$I.perc$ind.exp.var, digits = 1), pos = 3, col = "dark red", cex = .8)
-  xh <- barplot(H$I.perc$ind.exp.var, ylim = c(0,100), names.arg = c("island","exposure","depth"), ylab = "% independent effects", xlab = "Height Range", main = paste0(hab[h]), cex.main = 2, cex.names = .8)
-  text(x = xh, y = H$I.perc$ind.exp.var, label = round(H$I.perc$ind.exp.var, digits = 1), pos = 3, col = "dark red", cex = .8)
-  xd <- barplot(D$I.perc$ind.exp.var, ylim = c(0,100), names.arg = c("island","exposure","depth"), ylab = "% independent effects", xlab = "Fractal Dimension", cex.names = .8)
-  text(x = xd, y = D$I.perc$ind.exp.var, label = round(D$I.perc$ind.exp.var, digits = 1), pos = 3, col = "dark red", cex = .8)
-  
-  dev.off()
-}
-
-# all data
-R <- hier.part(data$R_log10, data[c("island","wave_max_log10","depth")]) #ordered in decreasing scale (island greatest, exposure operates at shoreline distances, then depth)
-H <- hier.part(data$H_log10, data[c("island","wave_max_log10","depth")])
-D <- hier.part(data$D_sum, data[c("island","wave_max_log10","depth")])
-
-png(paste0("figures/", hab[h], "_hier.png"), width = 600, height = 200, res = 100)
-
-par(mfrow=c(1,3), mar=c(5, 4.1, 3, 2))
-
-xr <- barplot(R$I.perc$ind.exp.var, ylim = c(0,100), names.arg = c("island","exposure","depth"), ylab = "% independent effects", xlab = "Rugosity", cex.names = .8)
-text(x = xr, y = R$I.perc$ind.exp.var, label = round(R$I.perc$ind.exp.var, digits = 1), pos = 3, col = "dark red", cex = .8)
-xh <- barplot(H$I.perc$ind.exp.var, ylim = c(0,100), names.arg = c("island","exposure","depth"), ylab = "% independent effects", xlab = "Height Range", cex.main = 2, cex.names = .8)
-text(x = xh, y = H$I.perc$ind.exp.var, label = round(H$I.perc$ind.exp.var, digits = 1), pos = 3, col = "dark red", cex = .8)
-xd <- barplot(D$I.perc$ind.exp.var, ylim = c(0,100), names.arg = c("island","exposure","depth"), ylab = "% independent effects", xlab = "Fractal Dimension", cex.names = .8)
-text(x = xd, y = D$I.perc$ind.exp.var, label = round(D$I.perc$ind.exp.var, digits = 1), pos = 3, col = "dark red", cex = .8)
-
-dev.off()
-
-# variation in intercepts ######################################################################################################
-lmodR <- lmer(R_log10 ~ wave_max_log10*depth + wave_max_log10 + depth + develop + (1|island), data)
-summary(lmodR)
-anova(lmodR)
-temp <- ranef(lmodR)$island
-temp$island <- rownames(temp)
-temp <- temp[order(temp$`(Intercept)`),]
-barplot(temp$`(Intercept)`, names=temp$island)
-
-# centroid of depth bins ######################################################################################################### 
-plot(R_log10 ~ D_sum, data)
-points(R_log10 ~ D_sum, data[data$depth_bin=="Deep",], col="red")
-points(R_log10 ~ D_sum, data[data$depth_bin=="Shallow",], col="green")
-points(R_log10 ~ D_sum, data[data$depth_bin=="Mid",], col="blue")
-rg <- aggregate(R_log10 ~ depth_bin, data, mean)
-fd <- aggregate(D_sum ~ depth_bin, data, mean)
-text(fd$D_sum, rg$`R_log10`, rg$depth_bin)
-
-# 3 descriptors plot #############################################################################################################
-source("R/functions.R")
-
-
-data <- read.csv("Complexity_all.csv")
-L <- 2
-L0 <- 0.01
-data$R2_log10 <- log10(data$R_theory_mean^2 - 1)
-data$HL0_log10 <- log10(data$H_mean / (L0 * sqrt(2)))
-
-grid.lines <- 350 
-R <- data$R2_log10 
-H <- data$HL0_log10 
-D <- data$D_mean
-
-R.pred <- seq(min(R)-0.25, max(R)+0.25, length=grid.lines)
-H.pred <- seq(min(H)-0.25, max(H)+0.25, length=grid.lines)
-mat <- expand.grid(R=R.pred, H=H.pred)
-D.mat <- matrix(D_func((sqrt(2) * L0)*(10^mat$H), sqrt(10^mat$R+1), L, L0), nrow = grid.lines, ncol = grid.lines)
-
-
-R_mean <- aggregate(R2_log10 ~ habitat, data, mean)
-H_mean <- aggregate(HL0_log10 ~ habitat, data, mean)
-D_mean <- aggregate(D_mean ~ habitat, data, mean)
-
-png("Figure1.png", width = 5, height = 5, units = "in", res = 300)
-par(mar=c(1.2, 2, 1, 1) +0.1, mfrow = c(2,2), family = "Times", ps = 10)
-scatter3D(R, H, D, pch = 20, cex = 1, 
-          col= rev(hcl.colors(100, "grays", alpha = 0.3)), 
-          xlim=c(min(R)-0.25, max(R)+0.25), 
-          ylim=c(min(H)-0.25, max(H)+0.25), 
-          zlim=c(2, max(D)+0.05), 
-          ylab="Height range", 
-          xlab="Rugosity", 
-          zlab="Fractal dimension", 
-          surf=list(x=R.pred, y=H.pred, z=D.mat, facets=NA, col=rgb(0,0,0,0.01), 
-                    fitpoints=data$D_theory_mean), 
-          theta=215, 
-          phi=0,
-          colkey=list(side = 2, length = 0.5, width = 1, line.clab = 1, dist=0),
-          clab=expression(italic(D))
-          )
-
-points3D(R_mean$R2_log10 - 0.2, H_mean$HL0_log10 + 0.2, D_mean$D_mean,
-         col = c("#009E73","#0072B2","#D55E00"), cex = 2, pch = 20,
-         # xlim=c(min(R)-0.25, max(R)+0.25),
-         # ylim=c(min(H)-0.25, max(H)+0.25),
-         # zlim=c(2, max(D)+0.05),
-         # ylab="Height range",
-         # xlab="Rugosity",
-         # zlab="Fractal dimension",
-         # theta=215,
-         # phi=0,
-         surf=NULL,
-         colkey=FALSE,
-         add=TRUE)
-mtext("(a)", side = 3, at = -.5)
-
-ss_tot <- sum((data$D_mean - mean(data$D_theory_mean))^2)
-ss_f <- sum((data$D_mean - mean(data$D_theory_mean))^2)
-ss_res <- sum((data$D_mean - data$D_theory_mean)^2)
-r_2 <- 1 - (ss_res / ss_tot)
-print(r_2)
-text3D(1.8, 1.2, 2.7, labels=expression(italic(r)^2 == 0.967), surf = NULL, add = TRUE, family = "Times")
-
-
-
-#####
-data.bayes.AGR <- data[data$habitat == "AGR" ,]
-data.bayes.AGR$R2_log10 <- log10(data.bayes.AGR$R_theory_mean^2 - 1)
-data.bayes.AGR$HL0_log10 <- log10(data.bayes.AGR$H_mean / (L0 * sqrt(2)))
-
-grid.lines <- 350 
-R2 <- data.bayes.AGR$R2_log10 
-H2 <- data.bayes.AGR$HL0_log10 
-D2 <- data.bayes.AGR$D_mean
-
-AGRcollist <- c("#D55E00","#FFFFFF")
-AGRcolors <- colorRampPalette(AGRcollist)(100)
-
-scatter3D(R2, H2, D2, pch = 20, cex = 1, 
-          col = rev(AGRcolors),
-          #col= rev(hcl.colors(100, "reds")),
-          xlim=c(min(R)-0.25, max(R)+0.25), 
-          ylim=c(min(H)-0.25, max(H)+0.25), 
-          zlim=c(2, max(D)+0.05), 
-          ylab="Height range", 
-          xlab="Rugosity", 
-          zlab="Fractal dimension", 
-          surf=list(x=R.pred, y=H.pred, z=D.mat, facets=NA, col=rgb(0,0,0,0.01), 
-                    fitpoints=data.bayes.AGR$D_theory_mean), 
-          theta=215, 
-          phi=0,
-          colkey=list(side = 4, length = 0.5, width = 1, line.clab = 1, dist=0))
-title("Aggregate reef", family = "Times")
-mtext("(b)", side = 3, at = -.5)
-#text3D(1.8, 1.2, 2.7, labels="Aggregate reef", add = TRUE, cex=.8, family = "Times")
-
-
-#####
-data.bayes.PAV <- data[data$habitat == "PAV" ,]
-data.bayes.PAV$R2_log10 <- log10(data.bayes.PAV$R_theory_mean^2 - 1)
-data.bayes.PAV$HL0_log10 <- log10(data.bayes.PAV$H_mean / (L0 * sqrt(2)))
-
-grid.lines <- 350 
-R2 <- data.bayes.PAV$R2_log10 
-H2 <- data.bayes.PAV$HL0_log10 
-D2 <- data.bayes.PAV$D_mean
-
-PAVcollist <- c("#0072B2","#FFFFFF")
-PAVcolors <- colorRampPalette(PAVcollist)(100)
-
-scatter3D(R2, H2, D2, pch = 20, cex = 1, 
-          col= rev(PAVcolors),
-          xlim=c(min(R)-0.25, max(R)+0.25), 
-          ylim=c(min(H)-0.25, max(H)+0.25), 
-          zlim=c(2, max(D)+0.05), 
-          ylab="Height range", 
-          xlab="Rugosity", 
-          zlab="Fractal dimension", 
-          surf=list(x=R.pred, y=H.pred, z=D.mat, facets=NA, col=rgb(0,0,0,0.01), 
-                    fitpoints=data.bayes.PAV$D_theory_mean), 
-          theta=215, 
-          phi=0,
-          colkey=list(side = 2, length = 0.5, width = 1, line.clab = 1, dist=0))
-title("Pavement", family = "Times")
-mtext("(c)", side = 3, at = -.5)
-#text3D(1.8, 1.2, 2.7, labels="Pavement", add = TRUE, cex=.8, family = "Times")
-
-#####
-data.bayes.ROB <- data[data$habitat_original == "ROB" ,]
-data.bayes.ROB$R2_log10 <- log10(data.bayes.ROB$R_theory_mean^2 - 1)
-data.bayes.ROB$HL0_log10 <- log10(data.bayes.ROB$H_mean / (L0 * sqrt(2)))
-
-grid.lines <- 350 
-R2 <- data.bayes.ROB$R2_log10 
-H2 <- data.bayes.ROB$HL0_log10 
-D2 <- data.bayes.ROB$D_mean
-
-ROBcollist <- c("#009E73","#FFFFFF")
-ROBcolors <- colorRampPalette(ROBcollist)(100)
-
-scatter3D(R2, H2, D2, pch = 20, cex = 1, 
-          col= rev(ROBcolors),
-          xlim=c(min(R)-0.25, max(R)+0.25), 
-          ylim=c(min(H)-0.25, max(H)+0.25), 
-          zlim=c(2, max(D)+0.05), 
-          ylab="Height range", 
-          xlab="Rugosity", 
-          zlab="Fractal dimension", 
-          surf=list(x=R.pred, y=H.pred, z=D.mat, facets=NA, col=rgb(0,0,0,0.01), 
-                    fitpoints=data.bayes.ROB$D_theory_mean), 
-          theta=215, 
-          phi=0,
-          colkey=list(side = 4, length = 0.5, width = 1, line.clab = 1, dist=0))
-title("Rock & Boulder", family = "Times")
-mtext("(d)", side = 3, at = -.5)
-#text3D(1.8, 1.2, 2.7, labels="Rock & boulder", add = TRUE, family = "Times")
-
-dev.off()
-
-# simple relationship plot with standard error ###################################################################################
-plot(D_sum ~ depth, data, las=2)
-mod <- lm(D_sum ~ depth, data)
-summary(mod)
-d <- unique(sort(data$depth))
-pre <- predict(mod, list(depth=d), se.fit=TRUE)
-lines(d, pre$fit)
-polygon(c(d, rev(d)), c(pre$fit + pre$se.fit, rev(pre$fit - pre$se.fit)), border=NA, col=rgb(0,0,0,0.3))
-
-# 2d descriptors plot ##########################################################################################################
-col.func <- colorRampPalette(c(rgb(.8,.8,.8,0.7),rgb(0,0,0,0.7)), alpha = FALSE)
-
-D <- seq(2, 2.6, length=50)
-L <- 2
-L0 <- 0.01
-data$R2_log10 <- log10(data$R_theory_mean^2 - 1)
-data$HL0_log10 <- log10(data$H_mean / (L0 * sqrt(2)))
-
-R2_log10 <- seq(min(data$R2_log10)-0.1, max(data$R2_log10)+0.1, length=50)
-mat_HL0 <- matrix(NA, length(D), length(R2_log10))
-
-for (i in 1:length(D)) {
-  for (j in 1:length(R2_log10)) {
-    HL0_log10 <- HL0_func(D[i], sqrt((10^R2_log10[j]) + 1), L, L0)
-    mat_HL0[i, j] <- HL0_log10
-  }
-}
-
-par(mar=c(7.1, 4.1, 4.1, 5.1), xpd=TRUE, mfrow = c(1,3))
-image(D, R2_log10, mat_HL0, col=NA, axes=FALSE, ylab=expression(paste("Rugosity (", italic(R)^2 - 1, ")")), xlab=expression(paste("Fractal dimension (", italic(D), ")")), xlim=c(1.8, 2.6), ylim=c(-1.5, 1.5))
-axis(2, at=log10(c(0.05, 0.1, 0.2, 0.5, 1, 2, 5, 12, 30)), labels=c(0.05, 0.1, 0.2, 0.5, 1, 2, 5, 12, 30))
-axis(1, at=seq(1.8, 2.6, 0.2))
-text(1.89, 1.2, "Greater height\nrange", cex=0.7)
-text(2.53, -1.3, "Smaller height\nrange", cex=0.7)
-points(R2_log10 ~ D_theory_mean, data, col = col.func(10)[as.numeric(cut(data$wave_max, breaks = 10))], pch = 20)
-temp.m <- data[data$wave_max == max(data$wave_max),]
-temp.n <- data[data$wave_max == min(data$wave_max),]
-points(mean(R2_log10) ~ mean(D_theory_mean), temp.m, col = "red", pch = 20, cex = 2)
-points(mean(R2_log10) ~ mean(D_theory_mean), temp.n, col = "green", pch = 20, cex = 2)
-legend("bottom", legend = c("maximum exposure","minimum exposure"), col = c("red","green"), pch = 20, ncol = 2, bty = "n", inset = c(0,-.22))
-
-image(D, R2_log10, mat_HL0, col=NA, axes=FALSE, ylab=expression(paste("Rugosity (", italic(R)^2 - 1, ")")), xlab=expression(paste("Fractal dimension (", italic(D), ")")), xlim=c(1.8, 2.6), ylim=c(-1.5, 1.5))
-axis(2, at=log10(c(0.05, 0.1, 0.2, 0.5, 1, 2, 5, 12, 30)), labels=c(0.05, 0.1, 0.2, 0.5, 1, 2, 5, 12, 30))
-axis(1, at=seq(1.8, 2.6, 0.2))
-text(1.89, 1.2, "Greater height\nrange", cex=0.7)
-text(2.53, -1.3, "Smaller height\nrange", cex=0.7)
-points(R2_log10 ~ D_theory_mean, data, col = col.func(10)[as.numeric(cut(data$depth, breaks = 10))], pch = 20)
-temp.m <- data[data$depth == max(data$depth),]
-temp.n <- data[data$depth == min(data$depth),]
-points(mean(R2_log10) ~ mean(D_theory_mean), temp.m, col = "red", pch = 20, cex = 2)
-points(mean(R2_log10) ~ mean(D_theory_mean), temp.n, col = "green", pch = 20, cex = 2)
-legend("bottom", legend = c("maximum depth","minimum depth"), col = c("red","green"), pch = 20, ncol = 2, bty = "n", inset = c(0,-.22))
-
-image(D, R2_log10, mat_HL0, col=NA, axes=FALSE, ylab=expression(paste("Rugosity (", italic(R)^2 - 1, ")")), xlab=expression(paste("Fractal dimension (", italic(D), ")")), xlim=c(1.8, 2.6), ylim=c(-1.5, 1.5))
-axis(2, at=log10(c(0.05, 0.1, 0.2, 0.5, 1, 2, 5, 12, 30)), labels=c(0.05, 0.1, 0.2, 0.5, 1, 2, 5, 12, 30))
-axis(1, at=seq(1.8, 2.6, 0.2))
-text(1.89, 1.2, "Greater height\nrange", cex=0.7)
-text(2.53, -1.3, "Smaller height\nrange", cex=0.7)
-points(R2_log10 ~ D_theory_mean, data, col = col.func(10)[as.numeric(cut(data$age, breaks = 10))], pch = 20)
-temp.m <- data[data$age == max(data$age),]
-temp.n <- data[data$age == min(data$age),]
-points(mean(R2_log10) ~ mean(D_theory_mean), temp.m, col = "red", pch = 20, cex = 2)
-points(mean(R2_log10) ~ mean(D_theory_mean), temp.n, col = "green", pch = 20, cex = 2)
-legend("bottom", legend = c("oldest","youngest"), col = c("red","green"), pch = 20, ncol = 2, bty = "n", inset = c(0,-.22))
-
-# temp <- data[data$habitat == "ROB",]
-# pts <- chull(temp$D_theory_mean, temp$R2_log10)
-# pts <- c(pts, pts[1])
-# polygon(temp$D_theory_mean[pts], temp$R2_log10[pts], col=hcl.colors(6, alpha=0.3)[1], border=NA)
-# points(R2_log10 ~ D_theory_mean, temp, col=hcl.colors(6, alpha=1)[1], pch=20)
-
-# R by D #######################################################################################################################
-
-ggplot(data, aes(x = D_sum, y = R_log10, col = habitat, fill = habitat, shape = habitat)) +
-  geom_point() +
-  labs(col= "Habitat Type", shape = "Habitat Type") +
-  scale_color_manual(values = alpha(c("red","steelblue","seagreen"), 0.8)) +
-  annotate("text", x = 2.13, y = 2.5, label = "Greater height\nrange") +
-  annotate("text", x = 2.6, y = 0.1, label = "Smaller height\nrange") +
-  scale_y_continuous(name = "Rugosity (log10)", limits = c(0, 2.6), breaks = c(0,0.5,1,1.5,2,2.5)) + 
-  scale_x_continuous(name = "Fractal dimension", limits = c(2, 2.7), breaks = c(2,2.2,2.4,2.6)) +
-  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
-        panel.background = element_blank(), axis.line = element_line(colour = "black"))
-
-ggplot(data, aes(x = D_sum, y = R_log10, col = depth)) +
-  geom_point() +
-  labs(col= "Depth") +
-  scale_color_gradient2(high = "red",mid = "steelblue",low = "green", midpoint = 15) +
-  annotate("text", x = 2.13, y = 2.5, label = "Greater height\nrange") +
-  annotate("text", x = 2.6, y = 0.1, label = "Smaller height\nrange") +
-  scale_y_continuous(name = "Rugosity (log10)", limits = c(0, 2.6), breaks = c(0,0.5,1,1.5,2,2.5)) + 
-  scale_x_continuous(name = "Fractal dimension", limits = c(2, 2.7), breaks = c(2,2.2,2.4,2.6)) +
-  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
-        panel.background = element_blank(), axis.line = element_line(colour = "black"))
-
-ggplot(data, aes(x = D_sum, y = R_log10, col = age)) +
-  geom_point() +
-  labs(col= "Island Age") +
-  scale_color_gradient2(high = "red",mid = "steelblue",low = "green", midpoint = 2) +
-  annotate("text", x = 2.13, y = 2.5, label = "Greater height\nrange") +
-  annotate("text", x = 2.6, y = 0.1, label = "Smaller height\nrange") +
-  scale_y_continuous(name = "Rugosity (log10)", limits = c(0, 2.6), breaks = c(0,0.5,1,1.5,2,2.5)) + 
-  scale_x_continuous(name = "Fractal dimension", limits = c(2, 2.7), breaks = c(2,2.2,2.4,2.6)) +
-  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
-        panel.background = element_blank(), axis.line = element_line(colour = "black"))
-
-# Habitat intercept ranking ####################################################################################################
-par(mfrow=c(1,3), mar=c(5, 6.1, 3, 3.5))
-
-mod <- lmer(R_log10 ~ wave_max_log10 * poly(depth.m, 2) * island + (1|habitat), data)
-temp <- ranef(mod)$habitat 
-temp$habitat <- rownames(temp)
-#temp <- temp[order(temp$`(Intercept)`),]
-barplot(temp$`(Intercept)`, names=temp$habitat, main = "Rugosity (log10)", ylim = c(-0.15,0.1))
-abline(h = 0)
-
-mod <- lmer(H_log10 ~ wave_max_log10 * poly(depth.m, 2) * island + (1|habitat), data)
-temp <- ranef(mod)$habitat 
-temp$habitat <- rownames(temp)
-#temp <- temp[order(temp$`(Intercept)`),]
-barplot(temp$`(Intercept)`, names=temp$habitat, main = "Height range (log10)", ylim = c(-0.3, 0.2))
-abline(h = 0)
-
-mod <- lmer(D_sum ~ wave_max_log10 * poly(depth.m, 2) * island + (1|habitat), data)
-temp <- ranef(mod)$habitat 
-temp$habitat <- rownames(temp)
-#temp <- temp[order(temp$`(Intercept)`),]
-barplot(temp$`(Intercept)`, names=temp$habitat, main = "Fractal dimension", ylim = c(-0.06, 0.04))
-abline(h = 0)
-
-# Metric predictions with different exposure levels at each island #############################################################
-# lines correspond with high, mid, and low wave energy of each island (max of each island will be different)
-
-dd <- 1:30
-mod <- lm(R_log10 ~ wave_max_log10 * poly(depth.m, 2) * island, data)
-
-par(mfrow=c(2, 4), mar=c(6, 6.1, 3, 3.5))
-
-for (ii in unique(data$island)) {
-  temp <- data[data$island==ii,]
-  plot(R_log10 ~ depth.m, temp, main=ii, col="grey", ylab = "Rugosity (log10)", xlab = "Depth, m", pch = 16)
-  wmn <- mean(temp$wave_max_log10)
-  wsd <- sd(temp$wave_max_log10)
-  lines(dd, predict(mod, list(wave_max_log10=rep(wmn - wsd, length(dd)), depth.m=dd, island=rep(ii, length(dd)))), ylim=c(0, 0.5), lty=2, col="blue", lwd = 2)
-  lines(dd, predict(mod, list(wave_max_log10=rep(wmn, length(dd)), depth.m=dd, island=rep(ii, length(dd)))), lty=1, lwd = 2)
-  lines(dd, predict(mod, list(wave_max_log10=rep(wmn + wsd, length(dd)), depth.m=dd, island=rep(ii, length(dd)))), lty=2, col="red", lwd = 2)
-}
-legend("topright", legend = c("+1 SD", "mean exposure", "-1 SD"), lty = c(2,1,2), col = c("red","black","blue"), bty = "n")
-
-mod <- lm(H_log10 ~ wave_max_log10 * poly(depth.m, 2) * island, data)
-for (ii in unique(data$island)) {
-  temp <- data[data$island==ii,]
-  plot(H_log10 ~ depth.m, temp, main=ii, col="grey", ylab = "Height range (log10)", xlab = "Depth, m", pch = 16)
-  wmn <- mean(temp$wave_max_log10)
-  wsd <- sd(temp$wave_max_log10)
-  lines(dd, predict(mod, list(wave_max_log10=rep(wmn - wsd, length(dd)), depth.m=dd, island=rep(ii, length(dd)))), ylim=c(0, 0.5), lty=2, col="blue", lwd = 2)
-  lines(dd, predict(mod, list(wave_max_log10=rep(wmn, length(dd)), depth.m=dd, island=rep(ii, length(dd)))), lty=1, lwd = 2)
-  lines(dd, predict(mod, list(wave_max_log10=rep(wmn + wsd, length(dd)), depth.m=dd, island=rep(ii, length(dd)))), lty=2, col="red", lwd = 2)
-}
-
-legend("topright", legend = c("+1 SD", "mean exposure", "-1 SD"), lty = c(2,1,2), col = c("red","black","blue"), bty = "n")
-
-
-mod <- lm(D_sum ~ wave_max_log10 * poly(depth.m, 2) * island, data)
-
-for (ii in unique(data$island)) {
-  temp <- data[data$island==ii,]
-  plot(D_sum ~ depth.m, temp, main=ii, col="grey", ylab = "Fractal dimension", xlab = "Depth, m", pch = 16)
-  wmn <- mean(temp$wave_max_log10)
-  wsd <- sd(temp$wave_max_log10)
-  lines(dd, predict(mod, list(wave_max_log10=rep(wmn - wsd, length(dd)), depth.m=dd, island=rep(ii, length(dd)))), ylim=c(0, 0.5), lty=2, col="blue", lwd = 2)
-  lines(dd, predict(mod, list(wave_max_log10=rep(wmn, length(dd)), depth.m=dd, island=rep(ii, length(dd)))), lty=1, lwd = 2)
-  lines(dd, predict(mod, list(wave_max_log10=rep(wmn + wsd, length(dd)), depth.m=dd, island=rep(ii, length(dd)))), lty=2, col="red", lwd = 2)
-}
-
-legend("topright", legend = c("+1 SD", "mean exposure", "-1 SD"), lty = c(2,1,2), col = c("red","black","blue"), bty = "n")
-
-# Asner vs. Madin ##############################################################################################################
-
-# map <- raster("habitat/comparison/ASU_GAO_Hawaii_SE_FineComplexity_2m.tif")
-# mapt <- projectRaster(map, crs = crs("+proj=longlat +datum=WGS84 +units=m +no_defs"))
-# writeRaster(mapP, "habitat/comparison/HawaiiSEFineRugo.tif")
-
-
-
-data <- read.csv("Complexity_all.csv")
-
-# mean of each site for comparison
-cond <- aggregate(depth ~ site+longitude+latitude+island, data, mean)
-sub <- cond[c(2,3)]
-
-files <- list.files("habitat/comparison", (pattern = "\\.tif$"))
-method <- data.frame()
-
-for (f in 1:length(files)) {
-
-  map <- raster(paste0("habitat/comparison/", files[f]))
-  
-  ex <- data.frame(sub$longitude,
-                   sub$latitude,
-                   raster::extract(map, sub, buffer = 10, fun = mean)) # 5m buffer around each coordinate
-  
-  names(ex)[1] <- "longitude"
-  names(ex)[2] <- "latitude"
-  names(ex)[3] <- "R_asn"
-  
-  compare <- merge(ex, cond, by = c("longitude","latitude"))
-  compare <- na.omit(compare)
-  
-  if (nrow(compare) > 0) {
-    compare$buffer <- 10
-    method <- rbind(method, compare)
-  }
-}
-
-write.csv(method, "habitat/comparison/MethodsCompare.csv")
-
-
-method <- read.csv("habitat/comparison/MethodsCompare.csv")
-SfM <- read.csv("habitat/comparison/SfM_SaPa.csv")
-
-names(SfM)[2] <- "site"
-names(SfM)[3] <- "R_sfm"
-SfM <- SfM[-c(1)]
-
-compare <- left_join(method, SfM)
-compare <- na.omit(compare)
-
-buf5 <- compare[compare$buffer == 5 ,]
-buf10 <- compare[compare$buffer == 10 ,]
-
-names(buf5)[3] <- "R_asn_5mbuf"
-names(buf10)[3] <- "R_asn_10mbuf"
-
-compare2 <- merge(buf5, buf10, by = c("longitude","latitude","R_sfm","site","island","depth"))
-compare2$R_sfm_log10 <- log10(compare2$R_sfm)
-
-compare2$R_sfm_test <- rank(compare2$R_sfm)/258
-# correlation plot 
-library(RColorBrewer)
-library(corrplot)
-par(mfrow = c(1,1))
-full_pred <- compare2[,c("R_sfm_test","R_asn_5mbuf","R_asn_10mbuf")]
-pred_cor <- cor(full_pred)
-head(round(pred_cor,2)) # good because no coefficients > 0.6 or < -0.6
-corrplot(pred_cor, method="color",col = COL2('RdBu', 10),tl.col = 'black',addCoef.col ='black',addgrid.col = 'white')
-
-# correlation plot by depth 
-compare2$depth_bin[compare2$depth <= 6] <- "shallow"
-compare2$depth_bin[compare2$depth > 6 & compare2$depth <=18] <- "mid"
-compare2$depth_bin[compare2$depth > 18] <- "deep"
-
-shallow <- compare2[compare2$depth <= 6 , ]
-mid <- compare2[compare2$depth > 6 & compare2$depth <=18 , ]
-deep <- compare2[compare2$depth > 18 , ]
-
-names(shallow)[3] <- "R_sfm_shallow"
-names(shallow)[7] <- "R_asn_5mbuf_shallow"
-names(shallow)[8] <- "R_asn_10mbuf_shallow"
-names(mid)[3] <- "R_sfm_mid"
-names(mid)[7] <- "R_asn_5mbuf_mid"
-names(mid)[8] <- "R_asn_10mbuf_mid"
-names(deep)[3] <- "R_sfm_deep"
-names(deep)[7] <- "R_asn_5mbuf_deep"
-names(deep)[8] <- "R_asn_10mbuf_deep"
-
-test <- merge(shallow, mid, all = T)
-compare.d <- merge(test, deep, all = T)
-
-full_pred <- shallow[,c("R_sfm_shallow","R_asn_5mbuf_shallow","R_asn_10mbuf_shallow")]#,"R_sfm_mid","R_asn_5mbuf_mid","R_asn_10mbuf_mid","R_sfm_deep","R_asn_5mbuf_deep","R_asn_10mbuf_deep")]
-pred_cor <- cor(full_pred)
-corrplot(pred_cor, method="color",col = COL2('RdBu', 10),tl.col = 'black',addCoef.col ='black',addgrid.col = 'white')
-
-full_pred <- mid[,c("R_sfm_mid","R_asn_5mbuf_mid","R_asn_10mbuf_mid")] #,"R_sfm_deep","R_asn_5mbuf_deep","R_asn_10mbuf_deep"
-pred_cor <- cor(full_pred)
-corrplot(pred_cor, method="color",col = COL2('RdBu', 10),tl.col = 'black',addCoef.col ='black',addgrid.col = 'white')
-
-full_pred <- deep[,c("R_sfm_deep","R_asn_5mbuf_deep","R_asn_10mbuf_deep")]
-pred_cor <- cor(full_pred)
-corrplot(pred_cor, method="color",col = COL2('RdBu', 10),tl.col = 'black',addCoef.col ='black',addgrid.col = 'white')
-
-
-# plot by buffer 
-plot(log10(compare$R_sfm[compare$buffer == 5]) ~ compare$R_asn[compare$buffer == 5], pch =16)
-points(log10(compare$R_sfm[compare$buffer == 10]) ~ compare$R_asn[compare$buffer == 10], pch =16, col = "hotpink")
-
-# plot by depth ranges too (how does it compare in the shallow, etc.) 
-
-par(mfrow = c(1,3))
-plot(log10(compare.d$R_sfm_shallow) ~ compare.d$R_asn_5mbuf_shallow, pch = 16, 
-     xlab = "Airborne Rugosity", ylab = "SfM Rugosity (log10)", col = "green", ylim = c(0,1), main = "Shallow")
-points(log10(compare.d$R_sfm_shallow) ~ compare.d$R_asn_10mbuf_shallow, pch = 16, col = "purple")
-
-plot(log10(compare.d$R_sfm_mid) ~ compare.d$R_asn_5mbuf_mid, pch = 17, 
-     xlab = "Airborne Rugosity", ylab = "SfM Rugosity (log10)", col = "green", ylim = c(0,1), main = "Mid")
-points(log10(compare.d$R_sfm_mid) ~ compare.d$R_asn_10mbuf_mid, pch = 17, col = "purple")
-
-plot(log10(compare.d$R_sfm_deep) ~ compare.d$R_asn_5mbuf_deep, pch = 15, 
-     xlab = "Airborne Rugosity", ylab = "SfM Rugosity (log10)", col = "green", ylim = c(0,1), main = "Deep")
-points(log10(compare.d$R_sfm_deep) ~ compare.d$R_asn_10mbuf_deep, pch = 15, col = "purple")
-
-legend("topright", legend = c("5m buffer","10m buffer"), pch = 16, col = c("green","purple"), bty = "n")
-
-# mean per island 
-
-ggplot(compare2) + 
-  geom_violin(aes(x = as.factor(island), y = R_sfm_test)) +
-  geom_violin(aes(x = as.factor(island), y = R_asn_10mbuf), adjust = 1) 
-
-# mean per depth 
-SfM$buffer <- "SfM"
-method.con <- method[-c(1,2,5,6)]
-names(method.con)[1] <- "Rugosity"
-names(SfM)[2] <- "Rugosity"
-SfM <- SfM[-c(3)]
-
-plotting <- rbind(method.con, SfM)
-
-ggplot(plotting, aes(x = depth_bin, y = Rugosity, fill = buffer)) +
-  geom_violin()
-
-
-
-
-# fixed effects plot for bayesian ##############################################################################################
-
-data <- read.csv("Complexity_22sitesremoved_sub_CNet.csv")
-L <- 2 #2x2m box
-scl <- L / c(1, 2, 3.125, 6.25, 12.5, 25, 50, 100, 200)
-L0 <- min(scl) 
-data2 <- data %>% mutate(R = 0.5*log10(R_theory_mean^2 - 1),
-                         D = log10(L/L0)*(D_mean-3),
-                         H = log10(H_mean/(sqrt(2)*L0))) 
-
-intercepts <- fit$summary(c("b0_a", "b0_b", "b0_c"))
-output.H <- as.data.frame(fit$summary("beta_a") )
-output.D <- as.data.frame(fit$summary("beta_b") )
-output.R <- as.data.frame(fit$summary("beta_c") )
-
-output.R$variable_plot <- output.D$variable_plot <- output.H$variable_plot <- c("habitat","habitat","habitat",
-                            "Depth", "Depth", "Depth",
-                            "Island Age", "Island Age", "Island Age",
-                            "Exposure", "Exposure", "Exposure",
-                            "Coral Cover", "Coral Cover", "Coral Cover",
-                            "Depth x Exposure", "Depth x Exposure", "Depth x Exposure"  )
-output.R$habitat <- output.D$habitat <- output.H$habitat <- c("AGR","PAV","ROB",
-                                                              "AGR","PAV","ROB",
-                                                              "AGR","PAV","ROB",
-                                                              "AGR","PAV","ROB",
-                                                              "AGR","PAV","ROB",
-                                                              "AGR","PAV","ROB")
-output.R$shape <- output.D$shape <- output.H$shape <- NA
-output.R$width <- output.D$width <- output.H$width <- NA
-output.R$color <- output.D$color <- output.H$color <- NA
-for (o in 1:nrow(output.R)) {
-  if(sign(output.R[o,"q5"]) == sign(output.R[o,"q95"])) {
-    output.R$width[o] <- "TRUE"
-    output.R$shape[o] <- 20}
-  else {
-    output.R$width[o] <- "FALSE" 
-    output.R$shape[o] <- 20}
-}
-for (o in 1:nrow(output.H)) {
-  if(sign(output.H[o,"q5"]) == sign(output.H[o,"q95"])) {
-    output.H$width[o] <- "TRUE"
-    output.H$shape[o] <- 20}
-  else {
-    output.H$width[o] <- "FALSE" 
-    output.H$shape[o] <- 20}
-}
-for (o in 1:nrow(output.D)) {
-  if(sign(output.D[o,"q5"]) == sign(output.D[o,"q95"])) {
-    output.D$width[o] <- "TRUE"
-    output.D$shape[o] <- 20}
-  else {
-    output.D$width[o] <- "FALSE" 
-    output.D$shape[o] <- 20}
-}
-
-output.R$color[output.R$habitat == "AGR"] <- "#D55E00"
-output.R$color[output.R$habitat == "PAV"] <- "#0072B2"
-output.R$color[output.R$habitat == "ROB"] <- "#009E73"
-output.H$color[output.H$habitat == "AGR"] <- "#D55E00"
-output.H$color[output.H$habitat == "PAV"] <- "#0072B2"
-output.H$color[output.H$habitat == "ROB"] <- "#009E73"
-output.D$color[output.D$habitat == "AGR"] <- "#D55E00"
-output.D$color[output.D$habitat == "PAV"] <- "#0072B2"
-output.D$color[output.D$habitat == "ROB"] <- "#009E73"
-
-ggplot(output.R, aes(x = variable_plot, y = mean, color = color, group = color)) + 
-  geom_hline(yintercept = 0, color = "grey") +
-  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width=.2, color = "black", position = position_dodge(width = .5)) +
-  geom_point(shape = output.R$shape, size = 4, col = output.R$color, position = position_dodge(width = .5)) +
-  coord_flip() +
-  theme_classic() +
-  xlab("") +
-  ylab("\nParameter Estimate") +
-  ggtitle("Rugosity")
-ggplot(output.H, aes(x = variable_plot, y = mean, color = color, group = color)) + 
-  geom_hline(yintercept = 0, color = "grey") +
-  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width=.2, color = "black", position = position_dodge(width = .5)) +
-  geom_point(shape = output.H$shape, size = 4, col = output.H$color, position = position_dodge(width = .5)) +
-  coord_flip() +
-  theme_classic() +
-  xlab("") +
-  ylab("\nParameter Estimate") +
-  ggtitle("Height range")
-ggplot(output.D, aes(x = variable_plot, y = mean, color = color, group = color)) + 
-  geom_hline(yintercept = 0, color = "grey") +
-  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width=.2, color = "black", position = position_dodge(width = .5)) +
-  geom_point(shape = output.D$shape, size = 4, col = output.D$color, position = position_dodge(width = .5)) +
-  coord_flip() +
-  theme_classic() +
-  xlab("") +
-  ylab("\nParameter Estimate") +
-  ggtitle("Fractal dimension")
-  
-
-output.H.sub <- output.H[-c(1:3) ,]
-output.R.sub <- output.R[-c(1:3) ,]
-output.D.sub <- output.D[-c(1:3) ,]
-
-ggplot(output.R.sub, aes(x = variable_plot, y = mean, color = color, group = color)) + 
-  geom_hline(yintercept = 0, color = "grey") +
-  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width=.2, color = "white", position = position_dodge(width = .5)) +
-  geom_point(shape = output.R.sub$shape, size = 4, col = output.R.sub$color, position = position_dodge(width = .5)) +
-  coord_flip() +
-  dark_theme_classic() +
-  xlab("") +
-  ylab("\nParameter Estimate") +
-  ggtitle("Rugosity")
-ggplot(output.H.sub, aes(x = variable_plot, y = mean, color = color, group = color)) + 
-  geom_hline(yintercept = 0, color = "grey") +
-  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width=.2, color = "white", position = position_dodge(width = .5)) +
-  geom_point(shape = output.H.sub$shape, size = 4, col = output.H.sub$color, position = position_dodge(width = .5)) +
-  coord_flip() +
-  dark_theme_classic() +
-  xlab("") +
-  ylab("\nParameter Estimate") +
-  ggtitle("Height range")
-ggplot(output.D.sub, aes(x = variable_plot, y = mean, color = color, group = color)) + 
-  geom_hline(yintercept = 0, color = "grey") +
-  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width=.2, color = "white", position = position_dodge(width = .5)) +
-  geom_point(shape = output.D.sub$shape, size = 4, col = output.D.sub$color, position = position_dodge(width = .5)) +
-  coord_flip() +
-  dark_theme_classic() +
-  xlab("") +
-  ylab("\nParameter Estimate") +
-  ggtitle("Fractal dimension")
-
-# coral vs other variables #####################################################################################################
-
-hab <- c("AGR","PAV","ROB")
-
-temp1 <- data[data$habitat== hab[1],]
-temp2 <- data[data$habitat== hab[2],]
-temp3 <- data[data$habitat== hab[3],]
-
-cor.dep <- ggplot() +
-  geom_point(aes(x = data2$depth, y = data2$CORAL), size = .2) +
-  geom_smooth(aes(x = temp1$depth, y = temp1$CORAL), method = "lm", col = "#D55E00", fill = "grey") +
-  geom_smooth(aes(x = temp2$depth, y = temp2$CORAL), method = "lm", col = "#0072B2", fill = "grey") +
-  geom_smooth(aes(x = temp3$depth, y = temp3$CORAL), method = "lm", col = "#009E73", fill = "grey") +
-  labs(x = "Depth, m", y = "Coral Cover, %") +
-  coord_cartesian(ylim = c(0,40)) +
-  theme_classic() +
-  theme(text = element_text(family = "Times-Roman", size = 12), axis.title = element_text(size = 10)) 
-
-cor.age <- ggplot() +
-  geom_point(aes(x = data2$age, y = data2$CORAL), size = .2) +
-  geom_smooth(aes(x = temp1$age, y = temp1$CORAL), method = "lm", col = "#D55E00", fill = "grey") +
-  geom_smooth(aes(x = temp2$age, y = temp2$CORAL), method = "lm", col = "#0072B2", fill = "grey") +
-  geom_smooth(aes(x = temp3$age, y = temp3$CORAL), method = "lm", col = "#009E73", fill = "grey") +
-  labs(x = "Geological reef age, mya", y = "") +
-  coord_cartesian(ylim = c(0,40)) +
-  theme_classic() +
-  theme(text = element_text(family = "Times-Roman", size = 12), axis.title = element_text(size = 10)) 
-
-cor.wave <- ggplot() +
-  geom_point(aes(x = data2$wave_max_log10, y = data2$CORAL), size = .2) +
-  geom_smooth(aes(x = temp1$wave_max_log10, y = temp1$CORAL), method = "lm", col = "#D55E00", fill = "grey") +
-  geom_smooth(aes(x = temp2$wave_max_log10, y = temp2$CORAL), method = "lm", col = "#0072B2", fill = "grey") +
-  geom_smooth(aes(x = temp3$wave_max_log10, y = temp3$CORAL), method = "lm", col = "#009E73", fill = "grey") +
-  labs(x = "Exposure, kW/m (log10)", y = "") +
-  coord_cartesian(ylim = c(0,40)) +
-  theme_classic() +
-  theme(text = element_text(family = "Times-Roman", size = 12), axis.title = element_text(size = 10)) 
-
-grid.arrange(arrangeGrob(cor.dep + ggtitle("(a)") + theme(plot.title = element_text(size = 12)), 
-                         cor.age + ggtitle("(b)") + theme(plot.title = element_text(size = 12)), 
-                         cor.wave + ggtitle("(c)") + theme(plot.title = element_text(size = 12)),
-                         nrow = 1, ncol = 3), 
-             mylegend,
-             heights = c(10,1))
-
-
-# Predicted complexity rasters #################################################################################################
-
-R.pred <- readAll(raster("habitat/predicted_rugosity.tif"))
-D.pred <- readAll(raster("habitat/predicted_fractaldimension.tif"))
-H.pred <- readAll(raster("habitat/predicted_heightrange.tif"))
-
-par(mfrow = c(3,1), family = "Times")
-plot(R.pred, col =  rev(RColorBrewer::brewer.pal(10, "RdYlBu")),  
-     legend.args = list(text = "Rugosity", family = "Times", cex = .8), ylim = c(21.28, 21.32),
-     family = "Times")
-text(-158, 21.325, labels = "(a)", xpd = NA, cex = 1.2)
-plot(D.pred, col =  rev(RColorBrewer::brewer.pal(10, "RdYlBu")),  
-     legend.args = list(text = "Fractal \ndimension", family = "Times", cex = .8), ylim = c(21.28, 21.32),
-     family = "Times")
-text(-158, 21.325, labels = "(b)", xpd = NA, cex = 1.2)
-plot(H.pred, col =  rev(RColorBrewer::brewer.pal(10, "RdYlBu")),  
-     legend.args = list(text = "Height \nrange", family = "Times", cex = .8), ylim = c(21.28, 21.32),
-     family = "Times")
-text(-158, 21.325, labels = "(c)", xpd = NA, cex = 1.2)
 
