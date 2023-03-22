@@ -6,3 +6,5 @@ The 'analysis.R' code (found in R) will reproduce the analyses and figures for A
 
 The 'supplemental_analysis.R' code (found in R) will reproduce the analyses and figures found in the supplementary information.
 
+The structural complexity dataset is available at https://www.fisheries.noaa.gov/inport/item/67851 
+
