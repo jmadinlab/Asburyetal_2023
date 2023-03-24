@@ -71,7 +71,7 @@ mylegend<-g_legend(ggplot(data3) +
 ll <- cbind(data3$longitude, data3$latitude)
 merc <- lnglat_to_xy(ll)
 
-ext <- draw_ext()
+ext <- draw_ext() # draw extent of study region; ensure to draw rectangle around region then press done 
 map <- ggplot() + 
   basemap_gglayer(ext, map_service = "esri", map_type = "world_imagery") +
   scale_fill_identity() + 
